@@ -1,56 +1,103 @@
-# GridWise LLM Backend
+# GridWise LLM
 
-Containerized FastAPI service for the BUP CSE Fest 2026 GridWise challenge.
+FastAPI backend for the BUP CSE Fest 2026 GridWise energy optimization challenge.
 
-## Architecture
+## Pipeline
 
-`operator_notes` flow through Gemini 2.0 Flash with a forced JSON response schema, deterministic guardrails, a PuLP/CBC linear program, and a pure replay validator before the response is returned. Gemini failures are retried once and then use a conservative local fallback so the optimizer still returns a valid base schedule.
+`operator_notes` -> Gemini `gemini-2.5-flash` structured JSON -> deterministic guardrails -> PuLP/CBC optimizer -> replay validator -> JSON response.
 
-The LP minimizes `sum(grid_kwh * tariff_bdt_per_kwh)` while enforcing solar availability, battery transitions, reserve/capacity, charge/discharge rates, end-of-day neutrality, and all validated directives.
+The optimizer minimizes total grid cost while enforcing solar availability, battery limits, directive constraints, and end-of-day battery neutrality.
 
-## Local setup
+## Run locally
 
-Python 3.11 is the supported runtime:
+Python 3.11 is supported and recommended:
 
 ```bash
+cd backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+# Set GEMINI_API_KEY in .env for Gemini-backed interpretation.
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Set `GEMINI_API_KEY` in `.env` for the hosted interpreter. `GEMINI_MODEL` defaults to `gemini-2.0-flash`; `RATE_LIMIT_PER_MINUTE` defaults to 60 per client IP. Do not commit `.env` or credentials.
+Configuration:
 
-## API
-
-```bash
-curl http://localhost:8000/health
-# {"status":"ok"}
-curl -X POST http://localhost:8000/optimize-energy \
-  -H 'content-type: application/json' \
-  --data @../prob-statement/sample-request.json
+```env
+GEMINI_API_KEY=your_google_ai_studio_key
+GEMINI_MODEL=gemini-2.5-flash
+RATE_LIMIT_PER_MINUTE=60
 ```
 
-Malformed or structurally invalid JSON returns 400. The service returns 429 when a client exceeds the configured rate limit and does not expose provider errors or stack traces.
+Without `GEMINI_API_KEY`, the service uses its controlled local fallback for development. Never commit `.env` or API keys.
 
-## Tests
+## Swagger and API docs
+
+With the server running:
+
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+- OpenAPI JSON: http://localhost:8000/openapi.json
+
+Swagger documents `GET /health`, `POST /optimize-energy`, the `OptimizeRequest` input schema, and the `OptimizeResponse` output schema.
+
+## Test the API
+
+Health check:
 
 ```bash
-pytest -q
+curl -i http://localhost:8000/health
 ```
 
-The public sample test checks every sample's directive semantics and validates that each response has a 24-hour plan. The test suite also covers health and malformed input handling.
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+Create a request from the first public case:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+
+pack = json.loads(Path("../prob-statement/BUP_CSE_FEST_2026_Preli_Public_Sample_Cases.json").read_text())
+Path("/tmp/gridwise-request.json").write_text(json.dumps(pack["cases"][0]["input"]))
+PY
+```
+
+Call the optimizer:
+
+```bash
+curl -i -X POST http://localhost:8000/optimize-energy \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  --data @/tmp/gridwise-request.json
+```
+
+The endpoint also accepts a complete public sample object containing `input` and `expected_output`; `expected_output` is ignored. Always send one JSON object, not two adjacent JSON objects.
+
+Run the automated tests:
+
+```bash
+cd backend
+PYTHONPATH=. pytest -q
+```
+
+The tests cover all public directive interpretations, wrapped sample requests, health, and malformed input. Invalid structure returns HTTP 400; excessive requests return HTTP 429.
 
 ## Docker
 
 ```bash
+cd backend
 docker build -t gridwise:local .
 docker run --rm -p 8000:8000 --env-file .env gridwise:local
 ```
 
-The image binds to `0.0.0.0:8000`, contains no credentials, and is suitable for Render, GHCR, or another public container platform.
+The container listens on `PORT` when provided and defaults to port 8000. It contains no credentials.
 
-## Limitations
+## Deployment
 
-The local fallback is intended for provider outage and local reproducibility. For the highest paraphrase accuracy during judging, configure a valid Google AI Studio key and sufficient quota.
+See [backend/deployment.md](backend/deployment.md) for Render, Railway, Docker, Gemini key, GHCR fallback image, and hackathon submission instructions.

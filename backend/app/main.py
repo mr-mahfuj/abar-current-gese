@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -46,7 +46,16 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="GridWise LLM", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="GridWise LLM Energy Optimizer",
+    description=(
+        "LLM-assisted campus energy scheduling API. Notes are interpreted by "
+        "Gemini, validated deterministically, compiled into PuLP constraints, "
+        "optimized, and replay-validated before response."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
+)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")))
 
 
@@ -60,26 +69,83 @@ async def internal_exception_handler(_request: Request, _exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "internal optimization error"})
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    summary="Check service readiness",
+    description="Returns ok when the HTTP service is ready to receive optimization requests.",
+    response_description="Service readiness status.",
+    tags=["system"],
+)
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/optimize-energy", response_model=OptimizeResponse)
-async def optimize_energy(body: dict[str, Any]) -> OptimizeResponse | JSONResponse:
+@app.post(
+    "/optimize-energy",
+    response_model=OptimizeResponse,
+    summary="Interpret directives and optimize a 24-hour energy schedule",
+    description=(
+        "Submit one scenario with exactly 24 ordered hourly entries and 1-3 operator notes. "
+        "The canonical request is the scenario object itself. A public sample wrapper containing "
+        "input and expected_output is also accepted; expected_output is ignored."
+    ),
+    response_description="Validated directive interpretations and a replay-validated schedule.",
+    tags=["optimization"],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/OptimizeRequest"},
+                    "examples": {
+                        "canonical": {
+                            "summary": "Canonical scenario request",
+                            "value": {
+                                "scenario_id": "SAMPLE-01",
+                                "operator_notes": ["Keep at least 50 kWh in the battery from 6 PM until 9 PM."],
+                                "hours": "Paste 24 entries with hour values 0 through 23.",
+                                "battery": {
+                                    "capacity_kwh": 200,
+                                    "initial_energy_kwh": 120,
+                                    "minimum_energy_kwh": 40,
+                                    "max_charge_kwh_per_hour": 50,
+                                    "max_discharge_kwh_per_hour": 50,
+                                },
+                            },
+                        },
+                        "sample-pack-wrapper": {
+                            "summary": "Public sample case wrapper",
+                            "value": {
+                                "input": "Paste a cases[n].input object here.",
+                                "expected_output": "Optional; ignored by the API.",
+                            },
+                        },
+                    },
+                }
+            }
+        }
+    },
+)
+async def optimize_energy(body: OptimizeRequest | dict[str, Any] = Body(...)) -> OptimizeResponse | JSONResponse:
     # Accept both the canonical request and the public sample-pack object copied with expected_output.
-    payload = body.get("input", body)
+    request: OptimizeRequest | None = None
+    if isinstance(body, OptimizeRequest):
+        request = body
+        payload = None
+    else:
+        payload = body.get("input", body)
     if not isinstance(payload, dict):
-        return JSONResponse(status_code=400, content={"detail": "invalid request"})
-    payload = dict(payload)
-    payload.pop("expected_output", None)
-    try:
-        request = OptimizeRequest.model_validate(payload)
-    except ValidationError as exc:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "invalid request", "errors": exc.errors()},
-        )
+        if request is None:
+            return JSONResponse(status_code=400, content={"detail": "invalid request"})
+    else:
+        payload = dict(payload)
+        payload.pop("expected_output", None)
+        try:
+            request = OptimizeRequest.model_validate(payload)
+        except ValidationError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "invalid request", "errors": exc.errors()},
+            )
 
     raw_directives = interpret_notes(request.operator_notes, request.battery.capacity_kwh)
     directives = validate_and_fix(raw_directives, len(request.operator_notes), request.battery.capacity_kwh)
