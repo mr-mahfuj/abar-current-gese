@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 SYSTEM_PROMPT = """You interpret energy operator notes into exactly one structured directive per note.
 Use only: solar_reduction {hours: integer list, factor: remaining usable fraction 0..1},
@@ -57,7 +57,9 @@ def _fallback(note: str, index: int, battery_capacity: float | None = None) -> d
     hours = _extract_hours(text)
     if not hours:
         return noop
-    if ("charging circuit" in text or "charging-circuit" in text) and "unavailable" in text:
+    if (
+        ("charging circuit" in text or "charging-circuit" in text) and "unavailable" in text
+    ) or re.search(r"(?:do not|don't|avoid|stop|cannot|can't|must not)\s+(?:charge|charging)\b", text):
         return _directive(index, "no_charge_window", {"hours": hours}, "Charging is unavailable in the stated window.")
     if any(token in text for token in ("solar", "pv", "panel", "cloud")):
         factor = _extract_remaining_factor(text)
@@ -65,11 +67,19 @@ def _fallback(note: str, index: int, battery_capacity: float | None = None) -> d
             factor = 0.5
         if factor is not None:
             return _directive(index, "solar_reduction", {"hours": hours, "factor": round(factor, 6)}, "Solar availability is reduced in the stated window.")
-    if ("no charge" in text or "not charge" in text or "charging" in text or "charger" in text) and any(token in text for token in ("stop", "unavailable", "without", "avoid", "disabled", "isolated", "maintenance", "inspection")):
+    if (
+        ("no charge" in text or "not charge" in text or "charging" in text or "charger" in text)
+        and any(token in text for token in ("stop", "unavailable", "without", "avoid", "disabled", "isolated", "maintenance", "inspection"))
+    ):
         return _directive(index, "no_charge_window", {"hours": hours}, "Charging is unavailable in the stated window.")
-    if "no discharge" in text or "not discharge" in text or "discharging" in text and any(token in text for token in ("stop", "unavailable", "without", "avoid")):
+    if (
+        "no discharge" in text
+        or "not discharge" in text
+        or re.search(r"(?:do not|don't|avoid|stop|cannot|can't|must not)\s+(?:discharge|discharging)\b", text)
+        or ("discharge" in text and any(token in text for token in ("unavailable", "disabled", "isolated", "maintenance")))
+    ):
         return _directive(index, "no_discharge_window", {"hours": hours}, "Discharging is unavailable in the stated window.")
-    if "reserve" in text or ("at least" in text and ("battery" in text or "stored" in text)):
+    if "reserve" in text or (any(token in text for token in ("battery", "stored energy")) and any(token in text for token in ("at least", "above", "minimum", "maintain", "keep", "hold"))):
         value = _number_before_kwh(text)
         if value is None and battery_capacity is not None:
             percentage = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
@@ -77,7 +87,7 @@ def _fallback(note: str, index: int, battery_capacity: float | None = None) -> d
                 value = battery_capacity * float(percentage.group(1)) / 100
         if value is not None:
             return _directive(index, "minimum_battery_reserve", {"hours": hours, "minimum_energy_kwh": value}, "Battery reserve is raised in the stated window.")
-    if any(token in text for token in ("grid", "intake", "feeder", "transformer", "substation")) and any(token in text for token in ("maximum", "max", "limit", "cap", "not exceed", "at or below", "must stay")):
+    if any(token in text for token in ("grid", "intake", "feeder", "transformer", "substation")) and any(token in text for token in ("maximum", "max", "limit", "cap", "not exceed", "at or below", "must stay", "under", "below")):
         value = _number_before_kwh(text)
         if value is not None:
             return _directive(index, "max_grid_window", {"hours": hours, "max_grid_kwh": value}, "Grid import is capped in the stated window.")
@@ -116,10 +126,10 @@ def _extract_hours(text: str) -> list[int] | None:
 
 
 def _extract_remaining_factor(text: str) -> float | None:
-    percent = re.search(r"(?:about|roughly|approximately|to|at)\s*(\d+(?:\.\d+)?)\s*%", text)
+    percent = re.search(r"(?:about|roughly|approximately|to|at|around)\s*(\d+(?:\.\d+)?)\s*(?:%|percent)(?!\w)", text)
     if percent:
         return float(percent.group(1)) / 100
-    reduction = re.search(r"(\d+(?:\.\d+)?)\s*%\s*(?:reduction|drop|decrease)", text)
+    reduction = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|percent)(?!\w)\s*(?:reduction|drop|decrease)", text)
     if reduction:
         return 1 - float(reduction.group(1)) / 100
     if "one-fifth" in text or "one fifth" in text:
@@ -147,11 +157,12 @@ def interpret_notes(operator_notes: list[str], battery_capacity: float | None = 
         from google.genai import types
 
         client = genai.Client(api_key=api_key)
+        model = os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
         contents = "Operator notes:\n" + "\n".join(f"{i}: {note}" for i, note in enumerate(operator_notes))
         for attempt in range(2):
             try:
                 response = client.models.generate_content(
-                    model=MODEL,
+                    model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,

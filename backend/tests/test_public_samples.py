@@ -27,6 +27,8 @@ def test_public_samples_are_valid_and_match_directive_semantics():
             assert len(result["hourly_plan"]) == 24
             assert result["total_grid_kwh"] >= 0
             assert result["total_cost_bdt"] >= 0
+            assert abs(result["total_cost_bdt"] - case["expected_output"]["total_cost_bdt"]) <= 0.01
+            assert abs(result["peak_grid_kwh"] - case["expected_output"]["peak_grid_kwh"]) <= 0.01
 
 
 def test_malformed_request_returns_400():

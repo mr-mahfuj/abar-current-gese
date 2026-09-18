@@ -22,6 +22,20 @@ from .schemas import DirectiveInterpretation, OptimizeRequest, OptimizeResponse
 load_dotenv()
 
 
+def _round_plan(plan):
+    return [
+        entry.model_copy(
+            update={
+                "grid_kwh": round(entry.grid_kwh, 2),
+                "solar_used_kwh": round(entry.solar_used_kwh, 2),
+                "battery_kwh": round(entry.battery_kwh, 2),
+                "battery_energy_after_kwh": round(entry.battery_energy_after_kwh, 2),
+            }
+        )
+        for entry in plan
+    ]
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, requests_per_minute: int = 60):
         super().__init__(app)
@@ -151,6 +165,7 @@ async def optimize_energy(body: OptimizeRequest | dict[str, Any] = Body(...)) ->
     directives = validate_and_fix(raw_directives, len(request.operator_notes), request.battery.capacity_kwh)
     typed_directives = [DirectiveInterpretation.model_validate(directive) for directive in directives]
     plan, compiled = solve(request.hours, request.battery, typed_directives)
+    plan = _round_plan(plan)
     total_grid, total_cost, peak_grid = validate_plan(plan, request.hours, request.battery, compiled)
     return OptimizeResponse(
         scenario_id=request.scenario_id,

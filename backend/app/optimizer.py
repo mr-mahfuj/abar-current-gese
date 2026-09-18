@@ -73,10 +73,15 @@ def solve(
             f"energy_{hour}", lowBound=compiled.minimum_reserve[hour], upBound=battery.capacity_kwh
         ) for hour in range(24)
     }
-    problem += pulp.lpSum(
+    peak_grid = pulp.LpVariable("peak_grid", lowBound=0)
+    for hour in range(24):
+        problem += peak_grid >= grid[hour]
+
+    primary_objective = pulp.lpSum(
         grid[hour] * hours[hour].tariff_bdt_per_kwh + EPSILON * (charge[hour] + discharge[hour])
         for hour in range(24)
     )
+    problem += primary_objective
     for hour in range(24):
         problem += grid[hour] + solar[hour] + discharge[hour] == hours[hour].demand_kwh + charge[hour]
         previous = battery.initial_energy_kwh if hour == 0 else energy[hour - 1]
@@ -87,6 +92,13 @@ def solve(
     status = problem.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=20))
     if pulp.LpStatus[status] != "Optimal":
         raise RuntimeError("energy schedule is infeasible")
+
+    optimal_primary = float(pulp.value(primary_objective) or 0.0)
+    problem += primary_objective <= optimal_primary + 1e-6
+    problem.objective = peak_grid
+    status = problem.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=20))
+    if pulp.LpStatus[status] != "Optimal":
+        raise RuntimeError("energy schedule secondary optimization failed")
 
     plan: list[HourlyPlanEntry] = []
     previous_energy = battery.initial_energy_kwh

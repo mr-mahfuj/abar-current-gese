@@ -4,7 +4,7 @@ FastAPI backend for the BUP CSE Fest 2026 GridWise energy optimization challenge
 
 ## Pipeline
 
-`operator_notes` -> Gemini `gemini-2.5-flash` structured JSON -> deterministic guardrails -> PuLP/CBC optimizer -> replay validator -> JSON response.
+`operator_notes` -> Gemini `gemini-3.8-flash` structured JSON -> deterministic guardrails -> PuLP/CBC optimizer -> replay validator -> JSON response.
 
 The optimizer minimizes total grid cost while enforcing solar availability, battery limits, directive constraints, and end-of-day battery neutrality.
 
@@ -26,7 +26,7 @@ Configuration:
 
 ```env
 GEMINI_API_KEY=your_google_ai_studio_key
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 RATE_LIMIT_PER_MINUTE=60
 ```
 
