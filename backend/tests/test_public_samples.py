@@ -35,6 +35,18 @@ def test_malformed_request_returns_400():
     assert response.status_code == 400
 
 
+def test_public_case_wrapper_is_accepted():
+    payload = json.loads(SAMPLES.read_text())
+    case = payload["cases"][0]
+    with TestClient(app) as client:
+        response = client.post(
+            "/optimize-energy",
+            json={"input": case["input"], "expected_output": case["expected_output"]},
+        )
+    assert response.status_code == 200
+    assert response.json()["scenario_id"] == case["input"]["scenario_id"]
+
+
 def test_health():
     with TestClient(app) as client:
         assert client.get("/health").json() == {"status": "ok"}

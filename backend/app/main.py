@@ -4,11 +4,13 @@ import os
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .guardrails import validate_and_fix
@@ -64,7 +66,21 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/optimize-energy", response_model=OptimizeResponse)
-async def optimize_energy(request: OptimizeRequest) -> OptimizeResponse:
+async def optimize_energy(body: dict[str, Any]) -> OptimizeResponse | JSONResponse:
+    # Accept both the canonical request and the public sample-pack object copied with expected_output.
+    payload = body.get("input", body)
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"detail": "invalid request"})
+    payload = dict(payload)
+    payload.pop("expected_output", None)
+    try:
+        request = OptimizeRequest.model_validate(payload)
+    except ValidationError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "invalid request", "errors": exc.errors()},
+        )
+
     raw_directives = interpret_notes(request.operator_notes, request.battery.capacity_kwh)
     directives = validate_and_fix(raw_directives, len(request.operator_notes), request.battery.capacity_kwh)
     typed_directives = [DirectiveInterpretation.model_validate(directive) for directive in directives]

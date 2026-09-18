@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = """You interpret energy operator notes into exactly one structured directive per note.
 Use only: solar_reduction {hours: integer list, factor: remaining usable fraction 0..1},
